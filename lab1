@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <fstream>
 #include <random>
+#include <gmpxx.h>
 using namespace std;
 
 static const uint32_t SEQUENCE_LENGTH = 0xFFFFFF;
@@ -11,7 +12,7 @@ class Default{
 public:
     uint32_t next_bit(){
         static mt19937_64 gen(random_device{}());
-        static uniform_int_distribution<uint32_t> dist(0, 10);
+        static uniform_int_distribution<uint32_t> dist(0, 1);
         return dist(gen) & 1u;
     }
 
@@ -19,14 +20,9 @@ public:
 
 //2
 int BitLength(uint32_t x) {
-    for (int i = 31; i >= 0; i--) {
-        if (x != 0) {
-            int bits = 0;
-            while (x) { x >>= 1; bits++; }
-            return bits;
-        }
-    }
-    return 1;
+    int bits = 0;
+    while (x){x >>= 1; bits++;}
+    return bits;
 }
 
 class LehmerLow{
@@ -160,25 +156,14 @@ public:
 
 //6
 
-int get_bit (uint32_t x, int i){
-    return (x & (1u << i)) & 1u;
+uint32_t CyclicShiftLeft(uint32_t x, unsigned int s) {
+    s %= 32;
+    return (x << s) | (x >> ((32 - s) % 32));
 }
 
-void set_bit (uint32_t x, int i){
-    if(i) x |= 1u << i;
-    else x &= ~(1u << i);
-}
-
-uint32_t CyclicShiftLeft(uint32_t x, int s) {
-    for (int i = 0; i < BitLength(x); i++)
-        set_bit(x, get_bit(x, i + s));
-    return x;
-}
-
-uint32_t CyclicShiftRight(uint32_t x, int s) {
-    for (int i = 0; i < BitLength(x); i++)
-        set_bit(x, get_bit(x, i - s));
-    return x;
+uint32_t CyclicShiftRight(uint32_t x, unsigned int s) {
+    s %= 32;
+    return (x >> s) | (x << ((32 - s) % 32));
 }
 
 
@@ -190,14 +175,56 @@ private:
 public:
     Wolfram_Generator(uint32_t r_0){r = r_0;}
 
-    uint8_t next_bit() {
-        uint8_t x = r & 1u;
+    uint32_t next_bit() {
+        uint32_t x = r & 1u;
         r = CyclicShiftLeft(r, 1) ^ (r | CyclicShiftRight(r, 1));
         return x;
     }
 
 };
 
+
+//8
+
+class Blum_Micali {
+
+private:
+    mpz_class p;
+    mpz_class a;
+    mpz_class x;
+
+public:
+    Blum_Micali(const mpz_class& p_, const mpz_class& a_, const mpz_class& x_0) {
+        p = p_;
+        a = a_;
+        x = x_0;
+    }
+
+    uint32_t next_bit() {
+        mpz_powm(x.get_mpz_t(), a.get_mpz_t(), x.get_mpz_t(), p.get_mpz_t());
+        return x > (p - 1) / 2;
+    }
+};
+
+//9
+
+class Blum_Blum_Shub {
+
+private:
+    mpz_class N;
+    mpz_class x;
+
+public:
+    Blum_Blum_Shub(const mpz_class& p, const mpz_class& q, const mpz_class& x_0) {
+        N = p * q;
+        x = x_0;
+    }
+
+    uint32_t next_bit() {
+        x = (x * x) % N;
+        return mpz_tstbit(x.get_mpz_t(), 0);
+    }
+};
 
 
 int main()
@@ -206,12 +233,26 @@ int main()
 
     Wolfram_Generator gen1(5);
 
+    mpz_class p1("CEA42B987C44FA642D80AD9F51F10457690DEF10C83D0BC1BCEE12FC3B6093E3", 16);
+    mpz_class a("5B88C41246790891C095E2878880342E88C79974303BD0400B090FE38A688356", 16);
+
+    Blum_Micali bm(p1, a, mpz_class(4));
+
+    mpz_class p2("D5BBB96D30086EC484EBA3D7F9CAEB07", 16);
+    mpz_class q2("425D2B9BFDB25B9CF6C416CC6E37B59C1F", 16);
+
+    Blum_Blum_Shub bbs(p2, q2, mpz_class(4));
+
     for (uint32_t i = 0; i < SEQUENCE_LENGTH; i++){
         file << gen1.next_bit();
     }
 
+    for (int i = 0; i < 100; i++) {
+        cout << bm.next_bit();
+    }
 
 
 
     return 0;
 }
+
