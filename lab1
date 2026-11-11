@@ -7,21 +7,23 @@
 #include <array>
 using namespace std;
 
-static const uint32_t SEQUENCE_LENGTH = 0xFFFFFF;
+static const uint32_t SEQUENCE_LENGTH = 0xFFFFF;
 
 
 class ByteSequence {
-
 private:
     vector<uint8_t> data;
 
 public:
-
     ByteSequence() = default;
-    ByteSequence(size_t n) {data.reserve(n);}
+
+    explicit ByteSequence(size_t capacity) {
+        data.reserve(capacity);
+    }
 
     void add(uint8_t x) {data.push_back(x);}
     size_t size() const {return data.size();}
+    bool empty() const {return data.empty();}
     uint8_t operator[](size_t i) const {return data[i];}
     const vector<uint8_t>& get_data() const {return data;}
 
@@ -29,22 +31,28 @@ public:
         ifstream file(filename, ios::binary);
         if (!file) return false;
 
-        data.assign(
-            istreambuf_iterator<char>(file),
-            istreambuf_iterator<char>()
-        );
+        data.clear();
 
-        return true;
+        char c;
+        while (file.get(c)) {
+            data.push_back(static_cast<uint8_t>(
+                static_cast<unsigned char>(c)
+            ));
+        }
+
+        return file.eof();
     }
 
     bool save(const string& filename) const {
         ofstream file(filename, ios::binary);
         if (!file) return false;
 
-        file.write(
-            reinterpret_cast<const char*>(data.data()),
-            data.size()
-        );
+        if (!data.empty()) {
+            file.write(
+                reinterpret_cast<const char*>(data.data()),
+                static_cast<streamsize>(data.size())
+            );
+        }
 
         return file.good();
     }
@@ -161,20 +169,45 @@ public:
 
 //5
 
+class LFSR89 {
+
+private:
+    uint32_t state[3];
+
+public:
+    LFSR89(uint32_t seed) {
+        state[0] = seed;
+        state[1] = 0;
+        state[2] = 0;
+        if (seed == 0) state[0] = 1;
+    }
+
+    inline uint32_t next_bit() {
+        uint32_t output = state[0] & 1u;
+        uint32_t feedback = (state[0] & 1u) ^ ((state[1] >> 19) & 1u);
+
+        state[0] = (state[0] >> 1) | (state[1] << 31);
+        state[1] = (state[1] >> 1) | (state[2] << 31);
+        state[2] = (state[2] >> 1) | (feedback << 24);
+
+        state[2] &= 0x01FFFFFFu;
+
+        return output;
+    }
+};
+
 class L89 {
 
 private:
-    LFSR L;
+    LFSR89 L;
 
 public:
-    L89(uint32_t x):
-        L(x, 89, {0,51})
-    {}
+
+    L89(uint32_t x) : L(x) {}
 
     inline uint32_t next_bit() {
         return L.next_bit();
     }
-
 };
 
 //6
@@ -268,7 +301,9 @@ public:
     }
 
     uint32_t next_bit() {
-        mpz_powm(x.get_mpz_t(), a.get_mpz_t(), x.get_mpz_t(), p.get_mpz_t());
+        mpz_class next;
+        mpz_powm(next.get_mpz_t(), a.get_mpz_t(), x.get_mpz_t(), p.get_mpz_t());
+        x = next;
         return x > (p - 1) / 2;
     }
 };
@@ -293,28 +328,95 @@ public:
     }
 };
 
+template <typename Generator>
+ByteSequence GenerateByteSequence(Generator& gen, size_t byte_count) {
+    ByteSequence seq(byte_count);
+
+    for (size_t i = 0; i < byte_count; i++) {
+        uint8_t byte = 0;
+
+        for (int bit = 0; bit < 8; bit++) {
+            byte = static_cast<uint8_t>(
+                (byte << 1) | (gen.next_bit() & 1u)
+            );
+        }
+
+        seq.add(byte);
+    }
+
+    return seq;
+}
+
+
 // tests
+
+struct AlphaLevel {
+    double alpha;
+    double z;
+};
+
+constexpr array<AlphaLevel, 7> ALPHA_LEVELS = {{
+    {0.10,   1.281551566},
+    {0.05,   1.644853627},
+    {0.025,  1.959963985},
+    {0.01,   2.326347874},
+    {0.005,  2.575829304},
+    {0.001,  3.090232306},
+    {0.0001, 3.719016485}
+}};
+
+double CriticalValue(int degrees_of_freedom, double alpha) {
+    for (const auto& level : ALPHA_LEVELS) {
+        if (abs(level.alpha - alpha) < 1e-9) {
+            double L = degrees_of_freedom;
+            return L + sqrt(2.0 * L) * level.z;
+        }
+    }
+}
+
+struct TestResult {
+    double chi_squared;
+    double critical_value;
+    int degrees_of_freedom;
+    double alpha;
+
+    bool passed() const {
+        return chi_squared <= critical_value;
+    }
+};
+
+
+TestResult MakeResult(double chi, int L, double alpha) {
+    return {
+        chi,
+        CriticalValue(L, alpha),
+        L,
+        alpha
+    };
+}
 
 double UniformityTest(const ByteSequence& seq) {
     array<uint64_t, 256> freq{};
 
-    size_t n = seq.size();
+    for (size_t i = 0; i < seq.size(); i++)
+        freq[seq[i]]++;
 
-    for (size_t i = 0; i < n; i++) freq[seq[i]]++;
-
-    double expected = double(n) / 256.0;
-    double chi = 0;
+    double expected = static_cast<double>(seq.size()) / 256.0;
+    double chi = 0.0;
 
     for (int i = 0; i < 256; i++) {
-        double diff = freq[i] - expected;
+        double diff = static_cast<double>(freq[i]) - expected;
         chi += diff * diff / expected;
     }
 
     return chi;
 }
 
-double IndependenceTest(const ByteSequence& seq) {
+int UniformityDF() {
+    return 255;
+}
 
+double IndependenceTest(const ByteSequence& seq,int& degrees_of_freedom) {
     uint64_t freq[256][256] = {};
     uint64_t row[256] = {};
     uint64_t col[256] = {};
@@ -330,13 +432,22 @@ double IndependenceTest(const ByteSequence& seq) {
         col[b]++;
     }
 
-    double chi = 0;
+    int active_rows = 0;
+    int active_cols = 0;
+
+    for (int i = 0; i < 256; i++) {
+        if (row[i] > 0) active_rows++;
+        if (col[i] > 0) active_cols++;
+    }
+
+    degrees_of_freedom = (active_rows - 1) * (active_cols - 1);
+    double chi = 0.0;
 
     for (int a = 0; a < 256; a++) {
         for (int b = 0; b < 256; b++) {
-            double expected = double(row[a]) * col[b] / n;
-            if (expected == 0) continue;
-            double diff = freq[a][b] - expected;
+            if (row[a] == 0 || col[b] == 0) continue;
+            double expected =static_cast<double>(row[a]) * col[b] / n;
+            double diff = static_cast<double>(freq[a][b]) - expected;
             chi += diff * diff / expected;
         }
     }
@@ -345,9 +456,10 @@ double IndependenceTest(const ByteSequence& seq) {
 }
 
 
-double HomogeneityTest(const ByteSequence& seq, int r) {
-
+double HomogeneityTest(const ByteSequence& seq, int r, int& degrees_of_freedom) {
     vector<array<uint64_t, 256>> freq(r);
+    for (auto& group : freq) group.fill(0);
+
     vector<uint64_t> row(r, 0);
     array<uint64_t, 256> col{};
 
@@ -355,23 +467,31 @@ double HomogeneityTest(const ByteSequence& seq, int r) {
 
     for (int k = 0; k < r; k++) {
         size_t start = n * k / r;
-        size_t end   = n * (k + 1) / r;
+        size_t end = n * (k + 1) / r;
 
         for (size_t i = start; i < end; i++) {
             uint8_t x = seq[i];
+
             freq[k][x]++;
             row[k]++;
             col[x]++;
         }
     }
 
-    double chi = 0;
+    int active_cols = 0;
+
+    for (int i = 0; i < 256; i++) {
+        if (col[i] > 0) active_cols++;
+    }
+
+    degrees_of_freedom = (r - 1) * (active_cols - 1);
+    double chi = 0.0;
 
     for (int k = 0; k < r; k++) {
         for (int i = 0; i < 256; i++) {
-            double expected = double(row[k]) * col[i] / n;
-            if (expected == 0) continue;
-            double diff = freq[k][i] - expected;
+            if (col[i] == 0) continue;
+            double expected = static_cast<double>(row[k]) * col[i] / n;
+            double diff = static_cast<double>(freq[k][i]) - expected;
             chi += diff * diff / expected;
         }
     }
@@ -379,12 +499,50 @@ double HomogeneityTest(const ByteSequence& seq, int r) {
     return chi;
 }
 
+void PrintResult(const string& name, const TestResult& result) {
+    cout << name << "\n";
+    cout << "Chi-squared: " << result.chi_squared << "\n";
+    cout << "Critical value: " << result.critical_value << "\n";
+    cout << "Degrees of freedom: " << result.degrees_of_freedom << "\n";
+    cout << "Alpha: " << result.alpha << "\n";
+    cout << (result.passed() ? "Do not reject H0\n\n" : "Reject H0\n\n");
+}
+
+
+void RunAllTests(const ByteSequence& seq, double alpha, int groups) {
+    TestResult uniformity = MakeResult(
+        UniformityTest(seq),
+        UniformityDF(),
+        alpha
+    );
+
+    PrintResult("Uniformity test", uniformity);
+
+    int independence_df = 0;
+    double independence_chi = IndependenceTest(seq, independence_df);
+
+    TestResult independence = MakeResult(
+        independence_chi,
+        independence_df,
+        alpha
+    );
+
+    PrintResult("Independence test", independence);
+
+    int homogeneity_df = 0;
+    double homogeneity_chi = HomogeneityTest(seq, groups, homogeneity_df);
+
+    TestResult homogeneity = MakeResult(
+        homogeneity_chi,
+        homogeneity_df,
+        alpha
+    );
+
+    PrintResult("Homogeneity test", homogeneity);
+}
 
 
 int main(){
-
-    ofstream file1("output1.txt");
-    ofstream file2("output2.txt", ios::binary);
 
     mpz_class p1("CEA42B987C44FA642D80AD9F51F10457690DEF10C83D0BC1BCEE12FC3B6093E3", 16);
     mpz_class a("5B88C41246790891C095E2878880342E88C79974303BD0400B090FE38A688356", 16);
@@ -393,24 +551,25 @@ int main(){
     mpz_class q2("425D2B9BFDB25B9CF6C416CC6E37B59C1F", 16);
     mpz_class x_0(4);
 
+
+    Default gen1;
     Text_Generator gen7("input2.txt");
     Wolfram_Generator gen8(5);
     Blum_Micali gen9(p1, a, x_0);
     Blum_Blum_Shub gen10(p2, q2, x_0);
 
-    for (uint32_t i = 0; i < SEQUENCE_LENGTH; i++){
-        file1 << gen8.next_bit();
-    }
 
-    for (int i = 0; i < 1000; i++) {
-        file2.put(gen7.next_byte());
-    }
+    //ByteSequence seq = GenerateByteSequence(gen7, SEQUENCE_LENGTH);
+    //ByteSequence seq(SEQUENCE_LENGTH);
+    //for (size_t i = 0; i < SEQUENCE_LENGTH; i++) seq.add(static_cast<uint8_t>(gen7.next_byte()));
 
-    for (int i = 0; i < 100; i++) {
-        cout << gen9.next_bit();
-    }
+    ByteSequence seq = GenerateByteSequence(gen1, SEQUENCE_LENGTH);
+
+    cout << "Generated bytes: " << seq.size() << "\n\n";
+    RunAllTests(seq, 0.05, 4);
 
     return 0;
 }
+
 
 
