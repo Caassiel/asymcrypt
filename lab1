@@ -3,9 +3,53 @@
 #include <fstream>
 #include <random>
 #include <gmpxx.h>
+#include <cmath>
+#include <array>
 using namespace std;
 
 static const uint32_t SEQUENCE_LENGTH = 0xFFFFFF;
+
+
+class ByteSequence {
+
+private:
+    vector<uint8_t> data;
+
+public:
+
+    ByteSequence() = default;
+    ByteSequence(size_t n) {data.reserve(n);}
+
+    void add(uint8_t x) {data.push_back(x);}
+    size_t size() const {return data.size();}
+    uint8_t operator[](size_t i) const {return data[i];}
+    const vector<uint8_t>& get_data() const {return data;}
+
+    bool load(const string& filename) {
+        ifstream file(filename, ios::binary);
+        if (!file) return false;
+
+        data.assign(
+            istreambuf_iterator<char>(file),
+            istreambuf_iterator<char>()
+        );
+
+        return true;
+    }
+
+    bool save(const string& filename) const {
+        ofstream file(filename, ios::binary);
+        if (!file) return false;
+
+        file.write(
+            reinterpret_cast<const char*>(data.data()),
+            data.size()
+        );
+
+        return file.good();
+    }
+};
+
 
 //1
 class Default{
@@ -44,6 +88,8 @@ public:
 
 };
 
+//3
+
 class LehmerHigh{
 
 private:
@@ -64,7 +110,7 @@ public:
 
 };
 
-//3, 4
+//4
 
 class LFSR {
 private:
@@ -96,6 +142,7 @@ public:
     }
 };
 
+
 class L20 {
 
 private:
@@ -111,6 +158,8 @@ public:
     }
 
 };
+
+//5
 
 class L89 {
 
@@ -128,7 +177,7 @@ public:
 
 };
 
-//5
+//6
 
 class Geffe_Generator {
 
@@ -154,7 +203,26 @@ public:
     }
 };
 
-//6
+//7
+
+class Text_Generator {
+
+private:
+    ifstream file;
+
+public:
+    Text_Generator(const string& filename) {
+        file.open(filename, ios::binary);
+    }
+
+    uint32_t next_byte() {
+        char c;
+        if (!file.get(c)) throw runtime_error("End of file");
+        return static_cast<unsigned char>(c);
+    }
+};
+
+//8
 
 uint32_t CyclicShiftLeft(uint32_t x, unsigned int s) {
     s %= 32;
@@ -165,7 +233,6 @@ uint32_t CyclicShiftRight(uint32_t x, unsigned int s) {
     s %= 32;
     return (x >> s) | (x << ((32 - s) % 32));
 }
-
 
 class Wolfram_Generator {
 
@@ -184,7 +251,7 @@ public:
 };
 
 
-//8
+//9
 
 class Blum_Micali {
 
@@ -194,9 +261,9 @@ private:
     mpz_class x;
 
 public:
-    Blum_Micali(const mpz_class& p_, const mpz_class& a_, const mpz_class& x_0) {
-        p = p_;
-        a = a_;
+    Blum_Micali(const mpz_class& p_0, const mpz_class& a_0, const mpz_class& x_0) {
+        p = p_0;
+        a = a_0;
         x = x_0;
     }
 
@@ -206,7 +273,7 @@ public:
     }
 };
 
-//9
+//10
 
 class Blum_Blum_Shub {
 
@@ -226,33 +293,124 @@ public:
     }
 };
 
+// tests
 
-int main()
-{
-    ofstream file("output.txt");
+double UniformityTest(const ByteSequence& seq) {
+    array<uint64_t, 256> freq{};
 
-    Wolfram_Generator gen1(5);
+    size_t n = seq.size();
+
+    for (size_t i = 0; i < n; i++) freq[seq[i]]++;
+
+    double expected = double(n) / 256.0;
+    double chi = 0;
+
+    for (int i = 0; i < 256; i++) {
+        double diff = freq[i] - expected;
+        chi += diff * diff / expected;
+    }
+
+    return chi;
+}
+
+double IndependenceTest(const ByteSequence& seq) {
+
+    uint64_t freq[256][256] = {};
+    uint64_t row[256] = {};
+    uint64_t col[256] = {};
+
+    size_t n = seq.size() - 1;
+
+    for (size_t i = 0; i < n; i++) {
+        uint8_t a = seq[i];
+        uint8_t b = seq[i + 1];
+
+        freq[a][b]++;
+        row[a]++;
+        col[b]++;
+    }
+
+    double chi = 0;
+
+    for (int a = 0; a < 256; a++) {
+        for (int b = 0; b < 256; b++) {
+            double expected = double(row[a]) * col[b] / n;
+            if (expected == 0) continue;
+            double diff = freq[a][b] - expected;
+            chi += diff * diff / expected;
+        }
+    }
+
+    return chi;
+}
+
+
+double HomogeneityTest(const ByteSequence& seq, int r) {
+
+    vector<array<uint64_t, 256>> freq(r);
+    vector<uint64_t> row(r, 0);
+    array<uint64_t, 256> col{};
+
+    size_t n = seq.size();
+
+    for (int k = 0; k < r; k++) {
+        size_t start = n * k / r;
+        size_t end   = n * (k + 1) / r;
+
+        for (size_t i = start; i < end; i++) {
+            uint8_t x = seq[i];
+            freq[k][x]++;
+            row[k]++;
+            col[x]++;
+        }
+    }
+
+    double chi = 0;
+
+    for (int k = 0; k < r; k++) {
+        for (int i = 0; i < 256; i++) {
+            double expected = double(row[k]) * col[i] / n;
+            if (expected == 0) continue;
+            double diff = freq[k][i] - expected;
+            chi += diff * diff / expected;
+        }
+    }
+
+    return chi;
+}
+
+
+
+int main(){
+
+    ofstream file1("output1.txt");
+    ofstream file2("output2.txt", ios::binary);
 
     mpz_class p1("CEA42B987C44FA642D80AD9F51F10457690DEF10C83D0BC1BCEE12FC3B6093E3", 16);
     mpz_class a("5B88C41246790891C095E2878880342E88C79974303BD0400B090FE38A688356", 16);
 
-    Blum_Micali bm(p1, a, mpz_class(4));
-
     mpz_class p2("D5BBB96D30086EC484EBA3D7F9CAEB07", 16);
     mpz_class q2("425D2B9BFDB25B9CF6C416CC6E37B59C1F", 16);
+    mpz_class x_0(4);
 
-    Blum_Blum_Shub bbs(p2, q2, mpz_class(4));
+    Text_Generator gen7("input2.txt");
+    Wolfram_Generator gen8(5);
+    Blum_Micali gen9(p1, a, x_0);
+    Blum_Blum_Shub gen10(p2, q2, x_0);
 
     for (uint32_t i = 0; i < SEQUENCE_LENGTH; i++){
-        file << gen1.next_bit();
+        file1 << gen8.next_bit();
+    }
+
+    for (int i = 0; i < 1000; i++) {
+        file2.put(gen7.next_byte());
     }
 
     for (int i = 0; i < 100; i++) {
-        cout << bm.next_bit();
+        cout << gen9.next_bit();
     }
-
-
 
     return 0;
 }
+
 
