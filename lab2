@@ -12,6 +12,9 @@ using namespace chrono;
 const mpz_class BBS_P("D5BBB96D30086EC484EBA3D7F9CAEB07", 16);
 const mpz_class BBS_Q("425D2B9BFDB25B9CF6C416CC6E37B59C1F", 16);
 const mpz_class BBS_N = BBS_P * BBS_Q;
+const mpz_class RSA_E("65537");
+
+// MILLER-RABIN PART
 
 gmp_randclass& rng() {
     static gmp_randclass r(gmp_randinit_mt);
@@ -69,6 +72,8 @@ bool Miller_Rabin(const mpz_class& n, int trials = 20) {
 
     return true;
 }
+
+// BBS PART
 
 uint64_t SplitMix64(uint64_t x) {
     x += 0x9E3779B97F4A7C15ULL;
@@ -143,6 +148,89 @@ mpz_class Generate_Prime(size_t bits, uint64_t seed) {
 }
 
 
+// RSA PROPER PART
+
+struct PublicKey {
+    mpz_class n;
+    mpz_class e;
+};
+
+struct PrivateKey {
+    mpz_class n;
+    mpz_class d;
+
+    mpz_class p, q;
+    mpz_class dP, dQ, qInv;
+};
+
+struct KeyPair {
+    PublicKey publicKey;
+    PrivateKey privateKey;
+};
+
+KeyPair GenerateKeyPair(size_t bits) {
+    KeyPair keys;
+    const mpz_class e = 65537;
+    mpz_class p, q;
+    mpz_class p1 = p - 1;
+    mpz_class q1 = q - 1;
+    mpz_class phi, gcd, temp;
+    uint64_t clock_seed = static_cast<uint64_t>(high_resolution_clock::now().time_since_epoch().count());
+
+    while (true) {
+        p = Generate_Prime(bits / 2, clock_seed);
+        mpz_gcd(gcd.get_mpz_t(), p1.get_mpz_t(), e.get_mpz_t());
+        if (gcd == 1) break;
+    }
+
+    while (true) {
+        q = Generate_Prime(bits - bits / 2, clock_seed);
+        if (p == q) continue;
+        mpz_gcd(gcd.get_mpz_t(), q1.get_mpz_t(), e.get_mpz_t());
+        if (gcd != 1) continue;
+        temp = p * q;
+        if (mpz_sizeinbase(temp.get_mpz_t(), 2) == bits) break;
+    }
+
+    keys.publicKey.n = p * q;
+    keys.publicKey.e = e;
+    phi = p1 * q1;
+
+    keys.privateKey.n = keys.publicKey.n;
+    keys.privateKey.p = p;
+    keys.privateKey.q = q;
+
+    keys.privateKey.dP = keys.privateKey.d % p1;
+    keys.privateKey.dQ = keys.privateKey.d % q1;
+
+    return keys;
+}
+
+
+mpz_class Encrypt(const mpz_class& message, const PublicKey& key) {
+    mpz_class ciphertext;
+    mpz_powm(ciphertext.get_mpz_t(), message.get_mpz_t(), key.e.get_mpz_t(), key.n.get_mpz_t());
+    return ciphertext;
+}
+
+mpz_class Decrypt(const mpz_class& ciphertext, const PrivateKey& key) {
+    mpz_class message;
+    mpz_powm(message.get_mpz_t(), ciphertext.get_mpz_t(), key.d.get_mpz_t(), key.n.get_mpz_t());
+    return message;
+}
+
+mpz_class Sign(const mpz_class& message, const PrivateKey& key) {
+    mpz_class signature;
+    mpz_powm(signature.get_mpz_t(), message.get_mpz_t(), key.d.get_mpz_t(), key.n.get_mpz_t());
+    return signature;
+}
+
+bool Verify(const mpz_class& message, const mpz_class& signature, const PublicKey& key) {
+    mpz_class recovered;
+    mpz_powm(recovered.get_mpz_t(), signature.get_mpz_t(), key.e.get_mpz_t(), key.n.get_mpz_t());
+    return recovered == message;
+}
+
 
 
 
@@ -180,4 +268,5 @@ int main() {
 
     return 0;
 }
+
 
